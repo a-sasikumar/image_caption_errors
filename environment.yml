@@ -1,0 +1,9 @@
+name: 682_image_caption_errors
+channels:
+  - defaults
+dependencies:
+  - pytorch
+  - python=3.9
+  - scikit-learn
+  - transformers
+prefix: /Users/amitgh/opt/anaconda3/envs/682_image_caption_errors
