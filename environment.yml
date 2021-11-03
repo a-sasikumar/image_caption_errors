@@ -3,9 +3,9 @@ channels:
   - defaults
   - conda-forge
 dependencies:
-  - pytorch
+  - pytorch=1.10.0
   - python=3.9
   - scikit-learn
   - transformers=4.12.2
-  - torchvision
+  - torchvision=0.10.0
 prefix: /Users/amitgh/opt/anaconda3/envs/682_image_caption_errors

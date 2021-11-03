@@ -1,12 +1,13 @@
+import urllib
+
 import numpy as np
 import torch
 import torch.nn as nn
+from PIL import Image
 from torch.nn import Linear
-from transformers import DistilBertModel, DistilBertConfig, DistilBertTokenizer, AutoTokenizer
 from torch.utils.data import Dataset, DataLoader
-# from PIL import Image
-# from torchvision import transforms
-# import urllib
+from torchvision.transforms import transforms
+from transformers import DistilBertModel, DistilBertTokenizer
 
 
 class ICErrorDataSet(Dataset):
@@ -67,26 +68,27 @@ def load_data():
     print('done')
 
 
-# def test_image_model():
-#     url, filename = ("https://github.com/pytorch/hub/raw/master/images/dog.jpg", "dog.jpg")
-#     try:
-#         urllib.URLopener().retrieve(url, filename)
-#     except:
-#         urllib.request.urlretrieve(url, filename)
-#
-#     input_image = Image.open(filename)
-#     preprocess = transforms.Compose([
-#         transforms.Resize(256),
-#         transforms.CenterCrop(224),
-#         transforms.ToTensor(),
-#         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-#     ])
-#     input_tensor = preprocess(input_image)
-#     input_batch = input_tensor.unsqueeze(0)  # create a mini-batch as expected by the model
-#
-    # model = torch.hub.load('pytorch/vision:v0.10.0', 'resnet18', pretrained=True)
+def test_image_model():
+    url, filename = ("https://github.com/pytorch/hub/raw/master/images/dog.jpg", "dog.jpg")
+    try:
+        urllib.URLopener().retrieve(url, filename)
+    except Exception as e:
+        print(f'Got exception {e}.')
+        urllib.request.urlretrieve(url, filename)
+
+    input_image = Image.open(filename)
+    preprocess = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    input_tensor = preprocess(input_image)
+    input_batch = input_tensor.unsqueeze(0)  # create a mini-batch as expected by the model
+    print(input_batch.shape)
+    model = torch.hub.load('pytorch/vision:v0.10.0', 'resnet50', pretrained=True)
 
 
 if __name__ == '__main__':
-    load_data()
-    # test_image_model()
+    # load_data()
+    test_image_model()
