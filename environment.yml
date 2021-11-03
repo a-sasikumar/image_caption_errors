@@ -6,6 +6,6 @@ dependencies:
   - pytorch
   - python=3.9
   - scikit-learn
-  - transformers
-  - torchvision=4.11.12
+  - transformers=4.12.2
+  - torchvision
 prefix: /Users/amitgh/opt/anaconda3/envs/682_image_caption_errors
