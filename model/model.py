@@ -45,7 +45,7 @@ class ICErrorDataSet(Dataset):
             except Exception as e:
                 error_count += 1
 
-        print('Errors: {}, V1 size: {}, V2 size: {}'.format(
+        print('Errors: {}, locally saved images count: {}, final examples count: {}'.format(
             error_count, len(valid_indices1), len(valid_indices2)
         ))
 
@@ -104,11 +104,11 @@ class CaptionErrorDetectorBase(nn.Module):
         return output
 
 
-def load_train_val_data(N=100, batch_size=20) -> (DataLoader, DataLoader):
+def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoader):
     train_data = pd.read_csv(
         '../data/train_data/part-00000-079f7de7-8645-4478-a8dd-f3249585db1c-c000.csv',
         escapechar='\\',
-        nrows=N
+        nrows=num_examples
     )
     filename = train_data['file_name'].values.tolist()
     caption = train_data['caption'].values.tolist()
@@ -137,15 +137,15 @@ def load_train_val_data(N=100, batch_size=20) -> (DataLoader, DataLoader):
 
 
 def train_model():
-    train_loader, val_loader = load_train_val_data(N=100, batch_size=50)
+    train_loader, val_loader = load_train_val_data(num_examples=100, batch_size=20)
     print('Data loaded.')
 
     my_model = CaptionErrorDetectorBase()
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(my_model.parameters())
 
-    max_epochs = 2
-    for epoch in range(max_epochs):
+    max_epochs = 10
+    for epoch in tqdm(range(max_epochs), total=max_epochs):
         print(f'Epoch: {epoch + 1}')
 
         # Training the model.
@@ -159,14 +159,15 @@ def train_model():
             loss.backward()
             optimizer.step()
 
-            print('loss={:.3g}'.format(loss))
+            print('train batch loss={:.3g}'.format(loss))
 
         # Perform validation
         my_model.eval()
         val_running_loss = 0.0
         val_running_correct = 0
         with torch.no_grad():
-            for i, data in tqdm(enumerate(val_loader), total=int(len(val_loader.dataset) / val_loader.batch_size)):
+            # for i, data in tqdm(enumerate(val_loader), total=int(len(val_loader.dataset) / val_loader.batch_size)):
+            for i, data in enumerate(val_loader):
                 local_batch, local_labels = data[0], data[1]
                 # local_batch['text'] = local_batch['text'].to(device)
                 # local_batch['image'] = local_batch['image'].to(device)
@@ -179,12 +180,12 @@ def train_model():
 
             val_loss = val_running_loss / len(val_loader.dataset)
             val_accuracy = 100. * val_running_correct / len(val_loader.dataset)
-            print(f'Epoch: {epoch}, Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}')
+            print(f'Epoch: {epoch + 1}, Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}')
 
     print('training done.')
 
 
-def load_data():
+def test_load_data():
     X_orig = [
         ("person in read riding a motorcycle", "http://farm9.staticflickr.com/8186/8119368305_4e622c8349_z.jpg", "motorcycle.jpg"),
         ("lady cutting cheese with reversed knife", "http://farm1.staticflickr.com/1/127244861_ab0c0381e7_z.jpg", "cheese.jpg"),
