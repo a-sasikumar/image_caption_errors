@@ -137,14 +137,14 @@ def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoa
 
 
 def train_model():
-    train_loader, val_loader = load_train_val_data(num_examples=100, batch_size=20)
+    train_loader, val_loader = load_train_val_data(num_examples=10, batch_size=10)
     print('Data loaded.')
 
     my_model = CaptionErrorDetectorBase()
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(my_model.parameters())
+    optimizer = optim.AdamW(my_model.parameters())
 
-    max_epochs = 10
+    max_epochs = 50
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         print(f'Epoch: {epoch + 1}')
 
@@ -160,6 +160,8 @@ def train_model():
             optimizer.step()
 
             print('train batch loss={:.3g}'.format(loss))
+            _, preds = torch.max(outputs.data, 1)
+            print('train batch accuracy={:.3g}'.format((preds == local_labels).sum().item() / local_labels.shape[0]))
 
         # Perform validation
         my_model.eval()
