@@ -119,6 +119,34 @@ class CaptionErrorDetectorBase(nn.Module):
         return output
 
 
+def load_test_data(num_examples, batch_size=64) -> DataLoader:
+    test_data = pd.read_csv(
+        '../data/test_data/part-00000-9d7fcbd5-eed5-4753-a955-d0dd5f1d7bf1-c000.csv',
+        escapechar='\\',
+        nrows=num_examples
+    )
+    filename = test_data['file_name'].values.tolist()
+    caption = test_data['caption'].values.tolist()
+    urls = test_data['flickr_url'].values.tolist()
+    target = test_data['foil'].values.reshape(-1).tolist()
+
+    X_test = [(caption_, url_, filename_) for caption_, url_, filename_ in zip(caption, urls, filename)]
+    Y_test = np.array(target) * 1
+
+    text_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased', model_max_length=20)
+    image_preprocessor = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+
+    print('Loading test data.')
+    test_dataset = ICErrorDataSet(X_test, Y_test, text_tokenizer, image_preprocessor)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+    return test_dataloader
+
+
 def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoader):
     train_data = pd.read_csv(
         '../data/train_data/part-00000-079f7de7-8645-4478-a8dd-f3249585db1c-c000.csv',
@@ -238,6 +266,9 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
         print()
 
     print('training done.')
+    print('Finding test time performance.')
+    test_loader = load_test_data(num_examples=128)
+    validate(test_loader, my_model, criterion, log_metrics=False)
 
 
 def validate(val_loader, my_model, loss_func, log_metrics=False):
