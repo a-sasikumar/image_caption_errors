@@ -30,7 +30,7 @@ print(device)
 class ICErrorDataSet(Dataset):
 
     def __init__(self, X, y, text_tokenizer, image_preprocessor):
-        self.data_root = "../data/"
+        self.data_root = "../data/images/"
 
         valid_indices1 = []
         # Save all images locally.
@@ -136,9 +136,11 @@ def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoa
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
+    print('Loading training data.')
     train_dataset = ICErrorDataSet(X_train, y_train, text_tokenizer, image_preprocessor)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
+    print('Loading validation data.')
     val_dataset = ICErrorDataSet(X_test, y_test, text_tokenizer, image_preprocessor)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
@@ -158,7 +160,7 @@ def train_model(num_examples=30, batch_size=10):
                             lr=1e-4,
                             eps=1e-5
                             )
-    max_epochs = 30
+    max_epochs = 10
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         print(f'Epoch: {epoch + 1}')
 
@@ -340,7 +342,7 @@ if __name__ == '__main__':
     # load_data()
     # test_image_model()
     # load_train_val_data()
-    train_model(num_examples=10, batch_size=10)
+    train_model(num_examples=20, batch_size=10)
     sys.exit(0)
 
 """
