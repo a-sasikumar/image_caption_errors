@@ -181,10 +181,25 @@ def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoa
     return train_dataloader, val_dataloader
 
 
+def persist_model(my_model, path_root="../checkpoint/", append_name="") -> str:
+    save_path = path_root + my_model.name + append_name
+    torch.save(my_model.state_dict(), save_path)
+    return save_path
+
+
+def load_model_from_disk(save_path: str) -> nn.Module:
+    my_model = CaptionErrorDetectorBase()
+    my_model.load_state_dict(torch.load(save_path))
+    my_model.eval()
+    print('Model loaded from path {} successfully.'.format(save_path))
+    return my_model
+
+
 def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
     print('Training started with num_example={}, batch_size={}, max_epochs={}'.format(
         num_examples, batch_size, max_epochs
     ))
+    custom_name = "N={},b={},ep={}".format(num_examples, batch_size, max_epochs)
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -203,6 +218,7 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
     os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')
     config = {
         "learning_rate": 1e-4,
+        "train_size": len(train_loader.dataset),
         "epochs": max_epochs,
         "batch_size": batch_size,
         "print_every": print_every,
@@ -210,6 +226,9 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
         "dataset": "FOIL-COCO"
     }
     wandb.init(project="cs682-image-captioning", entity="682f21team", config=config)
+
+    best_val_acc = 0
+    best_model_save_path = None
 
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         print(f'Epoch: {epoch + 1}')
@@ -253,7 +272,10 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
             train_correct += train_batch_correct
 
             if i % print_every == 0:
-                validate(val_loader, my_model, criterion, log_metrics=True)
+                val_loss, val_acc = validate(val_loader, my_model, criterion, log_metrics=True)
+                if val_acc > best_val_acc:
+                    best_model_save_path = persist_model(my_model, append_name=custom_name)
+                    best_val_acc = val_acc
                 wandb.log({'train_batch_loss': train_batch_loss})
 
         train_accuracy = 100 * train_correct / len(train_loader.dataset)
@@ -262,13 +284,18 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
             'train_accuracy': train_accuracy,
             'train_loss': train_loss
         })
-        validate(val_loader, my_model, criterion, log_metrics=True)
+        val_loss, val_acc = validate(val_loader, my_model, criterion, log_metrics=True)
+        if val_acc > best_val_acc:
+            best_model_save_path = persist_model(my_model, append_name=custom_name)
+            best_val_acc = val_acc
         print()
 
     print('training done.')
     print('Finding test time performance.')
     test_loader = load_test_data(num_examples=128)
-    validate(test_loader, my_model, criterion, log_metrics=False)
+    test_model = load_model_from_disk(best_model_save_path)
+    test_model.to(device)
+    validate(test_loader, test_model, criterion, log_metrics=False)
 
 
 def validate(val_loader, my_model, loss_func, log_metrics=False):
@@ -307,6 +334,7 @@ def validate(val_loader, my_model, loss_func, log_metrics=False):
                 'val_accuracy': val_accuracy,
                 'val_loss': val_loss
             })
+        return val_loss, val_accuracy
 
 
 def test_load_data():
@@ -400,7 +428,7 @@ if __name__ == '__main__':
     # test_image_model()
     # load_train_val_data()
     max_epochs = 1
-    train_model(num_examples=64, batch_size=4, max_epochs=max_epochs, print_every=4)
+    train_model(num_examples=64, batch_size=8, max_epochs=max_epochs, print_every=2)
     sys.exit(0)
 
 """
