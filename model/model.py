@@ -186,6 +186,10 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10):
                 }
             }
             device_local_labels = local_labels.to(device)
+            text['input_ids'].requires_grad = False
+            text['attention_mask'].requires_grad = False
+            device_local_labels.requires_grad = False
+            image.requires_grad = False
 
             outputs = my_model(device_input)
             loss = criterion(outputs, device_local_labels)
@@ -201,7 +205,7 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10):
             # print('train batch accuracy={:.3g}'.format((preds.to('cpu') == local_labels).sum().item() / local_labels.shape[0]))
 
             # print('train batch loss={:.3g}'.format(loss))
-            if i % 10 == 0:
+            if i % 50 == 0:
                 validate(val_loader, my_model, criterion)
         print()
         train_accuracy = 100 * train_correct / len(train_loader.dataset)
@@ -345,7 +349,7 @@ if __name__ == '__main__':
     # load_train_val_data()
     max_epochs = 5
     print("Epoch = " + str(max_epochs))
-    train_model(num_examples=2000, batch_size=100, max_epochs=max_epochs)
+    train_model(num_examples=10_000, batch_size=100, max_epochs=max_epochs)
     sys.exit(0)
 
 """
