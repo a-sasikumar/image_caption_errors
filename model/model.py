@@ -173,8 +173,7 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
 
     # Initialize wandb and add variables that you want associate with this run.
     os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')
-    wandb.init(project="cs682-image-captioning", entity="amitgh")
-    wandb.config = {
+    config = {
         "learning_rate": 1e-4,
         "epochs": max_epochs,
         "batch_size": batch_size,
@@ -182,6 +181,7 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
         "architecture": my_model.name,
         "dataset": "FOIL-COCO"
     }
+    wandb.init(project="cs682-image-captioning", entity="amitgh", config=config)
 
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         print(f'Epoch: {epoch + 1}')
@@ -229,7 +229,7 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
                 wandb.log({'train_batch_loss': train_batch_loss})
 
         train_accuracy = 100 * train_correct / len(train_loader.dataset)
-        print(f'\nEpoch: {epoch + 1}, \nTrain Loss: {train_loss:.4f}, Train Acc: {train_accuracy}')
+        print(f'\nEpoch: {epoch + 1}\nTrain Loss: {train_loss:.4f}, Train Acc: {train_accuracy}')
         wandb.log({
             'train_accuracy': train_accuracy,
             'train_loss': train_loss
@@ -272,8 +272,10 @@ def validate(val_loader, my_model, loss_func, log_metrics=False):
         val_accuracy = 100. * val_running_correct / len(val_loader.dataset)
         print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}')
         if log_metrics:
-            wandb.log({'val_accuracy': val_accuracy})
-            wandb.log({'val_loss': val_loss})
+            wandb.log({
+                'val_accuracy': val_accuracy,
+                'val_loss': val_loss
+            })
 
 
 def test_load_data():
@@ -367,7 +369,7 @@ if __name__ == '__main__':
     # test_image_model()
     # load_train_val_data()
     max_epochs = 1
-    train_model(num_examples=256, batch_size=16, max_epochs=max_epochs, print_every=4)
+    train_model(num_examples=64, batch_size=4, max_epochs=max_epochs, print_every=4)
     sys.exit(0)
 
 """
