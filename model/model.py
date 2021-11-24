@@ -18,7 +18,7 @@ from sklearn.model_selection import train_test_split
 
 device = torch.device('cpu')
 # set computation device
-if(torch.cuda.is_available()):
+if torch.cuda.is_available():
     # Get the GPU device name.
     device_name = torch.cuda.get_device_name()
     n_gpu = torch.cuda.device_count()
@@ -93,7 +93,7 @@ class CaptionErrorDetectorBase(nn.Module):
         # Bert embedding for textual part.
         self.bert_model = DistilBertModel.from_pretrained('distilbert-base-uncased')
         if torch.cuda.is_available():
-          self.bert_model.cuda()
+            self.bert_model.cuda()
 
         # ResNet embedding for image part. We use the last FCa layer's output.
         self.resnet_model = torchvision.models.resnet50(pretrained=True)
@@ -146,7 +146,7 @@ def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoa
 
 
 def train_model(num_examples=30, batch_size=10):
-    if(torch.cuda.is_available()):
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
     train_loader, val_loader = load_train_val_data(num_examples=num_examples, batch_size=batch_size)
     print('Data loaded.')
@@ -155,9 +155,9 @@ def train_model(num_examples=30, batch_size=10):
     my_model.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(my_model.parameters(),
-        lr = 1e-4,
-        eps = 1e-5
-    )
+                            lr=1e-4,
+                            eps=1e-5
+                            )
     max_epochs = 30
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         print(f'Epoch: {epoch + 1}')
@@ -177,9 +177,9 @@ def train_model(num_examples=30, batch_size=10):
             attention_mask = text['attention_mask']
             device_input = {
                 'image': image.to(device),
-                'text' : {
+                'text': {
                     'input_ids': input_ids.to(device),
-                    'attention_mask' : attention_mask.to(device)
+                    'attention_mask': attention_mask.to(device)
                 }
             }
             device_local_labels = local_labels.to(device)
@@ -198,13 +198,13 @@ def train_model(num_examples=30, batch_size=10):
             # print('train batch accuracy={:.3g}'.format((preds.to('cpu') == local_labels).sum().item() / local_labels.shape[0]))
 
             # print('train batch loss={:.3g}'.format(loss))
-            if(i%10 == 0):
+            if (i % 10 == 0):
                 validate(val_loader, my_model, criterion)
         print()
-        train_accuracy = 100 * train_correct/len(train_loader.dataset)
+        train_accuracy = 100 * train_correct / len(train_loader.dataset)
         print(f'Epoch: {epoch + 1}, \nTrain Loss: {train_loss:.4f}, Train Acc: {train_accuracy}')
-#         wandb.log({'train_accuracy': train_accuracy})
-#         wandb.log({'train_loss': train_loss})
+        #         wandb.log({'train_accuracy': train_accuracy})
+        #         wandb.log({'train_loss': train_loss})
         validate(val_loader, my_model, criterion)
         print()
     print('training done.')
@@ -227,9 +227,9 @@ def validate(val_loader, my_model, loss_func):
             attention_mask = text['attention_mask']
             device_input = {
                 'image': image.to(device),
-                'text' : {
+                'text': {
                     'input_ids': input_ids.to(device),
-                    'attention_mask' : attention_mask.to(device)
+                    'attention_mask': attention_mask.to(device)
                 }
             }
             device_local_labels = local_labels.to(device)
@@ -244,6 +244,8 @@ def validate(val_loader, my_model, loss_func):
         val_accuracy = 100. * val_running_correct / len(val_loader.dataset)
 
         print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}')
+
+
 #         wandb.log({'val_accuracy': val_accuracy})
 #         wandb.log({'val_loss': val_loss})
 
