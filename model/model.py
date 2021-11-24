@@ -1,3 +1,4 @@
+import os
 import sys
 import urllib
 from pathlib import Path
@@ -15,6 +16,7 @@ import torchvision
 from tqdm import tqdm
 from transformers import DistilBertModel, DistilBertTokenizer
 from sklearn.model_selection import train_test_split
+import wandb
 
 device = torch.device('cpu')
 # set computation device
@@ -56,7 +58,6 @@ class ICErrorDataSet(Dataset):
             error_count, len(valid_indices1), len(valid_indices2)
         ))
 
-        # sentences = [row[0] for row in X]
         sentences = [X[i][0] for i in valid_indices2]
         self.encodings = text_tokenizer(sentences, truncation=True, padding=True)
         self.labels = torch.from_numpy(y[valid_indices2])
@@ -105,6 +106,9 @@ class CaptionErrorDetectorBase(nn.Module):
         self.linear1 = Linear(768 + 1000, 100)
         self.linear2 = Linear(100, 2)
 
+        # A variable to briefly tell how the architecture is.
+        self.name = "DistilBert+ResNet+Linear2"
+
     def forward(self, x):
         text_embeddings = self.bert_model(**x["text"])  # (N, 8, 768)
         image_embeddings = self.resnet_model(x["image"])  # (N, 1000)
@@ -149,7 +153,11 @@ def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoa
     return train_dataloader, val_dataloader
 
 
-def train_model(num_examples=30, batch_size=10, max_epochs=10):
+def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
+    print('Training started with num_example={}, batch_size={}, max_epochs={}'.format(
+        num_examples, batch_size, max_epochs
+    ))
+
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     train_loader, val_loader = load_train_val_data(num_examples=num_examples, batch_size=batch_size)
@@ -162,6 +170,19 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10):
                             lr=1e-4,
                             eps=1e-5
                             )
+
+    # Initialize wandb and add variables that you want associate with this run.
+    os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')
+    wandb.init(project="cs682-image-captioning", entity="amitgh")
+    wandb.config = {
+        "learning_rate": 1e-4,
+        "epochs": max_epochs,
+        "batch_size": batch_size,
+        "print_every": print_every,
+        "architecture": my_model.name,
+        "dataset": "FOIL-COCO"
+    }
+
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         print(f'Epoch: {epoch + 1}')
 
@@ -198,26 +219,28 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10):
 
             _, preds = torch.max(outputs.data, 1)
 
-            train_loss += loss.item()
-            train_correct += (preds == device_local_labels).sum().item()
+            train_batch_loss = loss.item()
+            train_loss += train_batch_loss
+            train_batch_correct = (preds == device_local_labels).sum().item()
+            train_correct += train_batch_correct
 
-            # print('train batch loss={:.3g}'.format(loss))
-            # print('train batch accuracy={:.3g}'.format((preds.to('cpu') == local_labels).sum().item() / local_labels.shape[0]))
+            if i % print_every == 0:
+                validate(val_loader, my_model, criterion, log_metrics=True)
+                wandb.log({'train_batch_loss': train_batch_loss})
 
-            # print('train batch loss={:.3g}'.format(loss))
-            if i % 50 == 0:
-                validate(val_loader, my_model, criterion)
-        print()
         train_accuracy = 100 * train_correct / len(train_loader.dataset)
-        print(f'Epoch: {epoch + 1}, \nTrain Loss: {train_loss:.4f}, Train Acc: {train_accuracy}')
-        #         wandb.log({'train_accuracy': train_accuracy})
-        #         wandb.log({'train_loss': train_loss})
-        validate(val_loader, my_model, criterion)
+        print(f'\nEpoch: {epoch + 1}, \nTrain Loss: {train_loss:.4f}, Train Acc: {train_accuracy}')
+        wandb.log({
+            'train_accuracy': train_accuracy,
+            'train_loss': train_loss
+        })
+        validate(val_loader, my_model, criterion, log_metrics=True)
         print()
+
     print('training done.')
 
 
-def validate(val_loader, my_model, loss_func):
+def validate(val_loader, my_model, loss_func, log_metrics=False):
     # Perform validation
     my_model.eval()
     val_running_loss = 0.0
@@ -226,8 +249,6 @@ def validate(val_loader, my_model, loss_func):
         # for i, data in tqdm(enumerate(val_loader), total=int(len(val_loader.dataset) / val_loader.batch_size)):
         for i, data in enumerate(val_loader):
             local_batch, local_labels = data[0], data[1]
-            # local_batch['text'] = local_batch['text'].to(device)
-            # local_batch['image'] = local_batch['image'].to(device)
             text = local_batch['text']
             image = local_batch['image']
             input_ids = text['input_ids']
@@ -249,12 +270,10 @@ def validate(val_loader, my_model, loss_func):
 
         val_loss = val_running_loss
         val_accuracy = 100. * val_running_correct / len(val_loader.dataset)
-
         print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}')
-
-
-#         wandb.log({'val_accuracy': val_accuracy})
-#         wandb.log({'val_loss': val_loss})
+        if log_metrics:
+            wandb.log({'val_accuracy': val_accuracy})
+            wandb.log({'val_loss': val_loss})
 
 
 def test_load_data():
@@ -347,9 +366,8 @@ if __name__ == '__main__':
     # load_data()
     # test_image_model()
     # load_train_val_data()
-    max_epochs = 5
-    print("Epoch = " + str(max_epochs))
-    train_model(num_examples=10_000, batch_size=100, max_epochs=max_epochs)
+    max_epochs = 1
+    train_model(num_examples=256, batch_size=16, max_epochs=max_epochs, print_every=4)
     sys.exit(0)
 
 """
