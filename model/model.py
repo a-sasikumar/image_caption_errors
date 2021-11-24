@@ -209,7 +209,7 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
         "architecture": my_model.name,
         "dataset": "FOIL-COCO"
     }
-    wandb.init(project="cs682-image-captioning", entity="amitgh", config=config)
+    wandb.init(project="cs682-image-captioning", entity="682f21team", config=config)
 
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         print(f'Epoch: {epoch + 1}')
