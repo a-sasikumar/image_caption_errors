@@ -65,9 +65,9 @@ class ICErrorDataSet(Dataset):
         text_item = {k: torch.tensor(v[index]) for k, v in self.encodings.items()}
         image_item = self.image_encodings[index]
         return {
-            "text": text_item,
-            "image": image_item
-        }, self.labels[index]
+                   "text": text_item,
+                   "image": image_item
+               }, self.labels[index]
 
     def __len__(self):
         return len(self.labels)
@@ -92,18 +92,20 @@ class CaptionErrorDetectorBase(nn.Module):
 
         # Bert embedding for textual part.
         self.bert_model = DistilBertModel.from_pretrained('distilbert-base-uncased')
-        if torch.cuda.is_available():
-            self.bert_model.cuda()
+
+        # for param in self.bert_model.parameters():
+        #     param.requires_grad = False
 
         # ResNet embedding for image part. We use the last FCa layer's output.
         self.resnet_model = torchvision.models.resnet50(pretrained=True)
-        # print(self.resnet_model)
+
+        # for param in self.resnet_model.parameters():
+        #     param.requires_grad = False
 
         self.linear1 = Linear(768 + 1000, 100)
         self.linear2 = Linear(100, 2)
 
     def forward(self, x):
-        # TODO: try freezing bert and/or resnet layers if data is less.
         text_embeddings = self.bert_model(**x["text"])  # (N, 8, 768)
         image_embeddings = self.resnet_model(x["image"])  # (N, 1000)
         text_cls_embeddings = text_embeddings.last_hidden_state[:, 0, :]  # (N, 768)
@@ -128,7 +130,7 @@ def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoa
     Y = np.array(target) * 1
     X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.1, random_state=10)
 
-    text_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+    text_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased', model_max_length=20)
     image_preprocessor = transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
@@ -147,7 +149,7 @@ def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoa
     return train_dataloader, val_dataloader
 
 
-def train_model(num_examples=30, batch_size=10):
+def train_model(num_examples=30, batch_size=10, max_epochs=10):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     train_loader, val_loader = load_train_val_data(num_examples=num_examples, batch_size=batch_size)
@@ -160,7 +162,6 @@ def train_model(num_examples=30, batch_size=10):
                             lr=1e-4,
                             eps=1e-5
                             )
-    max_epochs = 10
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         print(f'Epoch: {epoch + 1}')
 
@@ -200,7 +201,7 @@ def train_model(num_examples=30, batch_size=10):
             # print('train batch accuracy={:.3g}'.format((preds.to('cpu') == local_labels).sum().item() / local_labels.shape[0]))
 
             # print('train batch loss={:.3g}'.format(loss))
-            if (i % 10 == 0):
+            if i % 10 == 0:
                 validate(val_loader, my_model, criterion)
         print()
         train_accuracy = 100 * train_correct / len(train_loader.dataset)
@@ -252,62 +253,62 @@ def validate(val_loader, my_model, loss_func):
 #         wandb.log({'val_loss': val_loss})
 
 
-# def test_load_data():
-#     X_orig = [
-#         ("person in read riding a motorcycle", "http://farm9.staticflickr.com/8186/8119368305_4e622c8349_z.jpg", "motorcycle.jpg"),
-#         ("lady cutting cheese with reversed knife", "http://farm1.staticflickr.com/1/127244861_ab0c0381e7_z.jpg", "cheese.jpg"),
-#         ("girl touching a buffalo", "http://farm3.staticflickr.com/2169/2118578392_1193aa04a0_z.jpg", "boy.jpg")
-#     ]
-#     Y_orig = ['true', 'true', 'false']
-#
-#     X_panda = pd.DataFrame(X_orig)
-#     Y_panda = pd.DataFrame(Y_orig)
-#
-#     X = X_panda.values.tolist()
-#     Y = (np.array(Y_panda.values.reshape(-1).tolist()) == 'true') * 1
-#
-#     sentences = [row[0] for row in X]
-#
-#     # Embed text using BERT model.
-#     text_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-#
-#     # model = DistilBertModel.from_pretrained('distilbert-base-uncased')
-#     # {'input_ids': [[]], 'attention_mask': [[]]}
-#     # inputs = text_tokenizer(sentences, return_tensors="pt", padding=True)
-#     # text_tokenizer.convert_ids_to_tokens(inputs['input_ids'][0])  # to get back the tokens.
-#     # outputs = model(**inputs)
-#     # return
-#
-#     image_preprocessor = transforms.Compose([
-#         transforms.Resize(256),
-#         transforms.CenterCrop(224),
-#         transforms.ToTensor(),
-#         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-#     ])
-#     train_dataset = ICErrorDataSet(X, Y, text_tokenizer, image_preprocessor)
-#     train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
-#
-#     my_model = CaptionErrorDetectorBase()
-#     criterion = nn.CrossEntropyLoss()
-#     optimizer = optim.Adam(my_model.parameters(),
-#             lr = 5e-5, # args.learning_rate - default is 5e-5
-#             eps = 1e-5
-#         )
-#     max_epochs = 2
-#     for epoch in range(max_epochs):
-#         # Training the model.
-#         my_model.train()
-#         for local_batch, local_labels in train_dataloader:
-#             # print(local_batch, local_labels)
-#             optimizer.zero_grad()
-#
-#             outputs = my_model(local_batch)
-#             loss = criterion(outputs, local_labels)
-#             loss.backward()
-#             optimizer.step()
-#
-#             print('loss={:.3g}'.format(loss))
-#     print('done')
+def test_load_data():
+    X_orig = [
+        ("person in read riding a motorcycle", "http://farm9.staticflickr.com/8186/8119368305_4e622c8349_z.jpg", "motorcycle.jpg"),
+        ("lady cutting cheese with reversed knife", "http://farm1.staticflickr.com/1/127244861_ab0c0381e7_z.jpg", "cheese.jpg"),
+        ("girl touching a buffalo", "http://farm3.staticflickr.com/2169/2118578392_1193aa04a0_z.jpg", "boy.jpg")
+    ]
+    Y_orig = ['true', 'true', 'false']
+
+    X_panda = pd.DataFrame(X_orig)
+    Y_panda = pd.DataFrame(Y_orig)
+
+    X = X_panda.values.tolist()
+    Y = (np.array(Y_panda.values.reshape(-1).tolist()) == 'true') * 1
+
+    sentences = [row[0] for row in X]
+
+    # Embed text using BERT model.
+    text_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+
+    # model = DistilBertModel.from_pretrained('distilbert-base-uncased')
+    # {'input_ids': [[]], 'attention_mask': [[]]}
+    # inputs = text_tokenizer(sentences, return_tensors="pt", padding=True)
+    # text_tokenizer.convert_ids_to_tokens(inputs['input_ids'][0])  # to get back the tokens.
+    # outputs = model(**inputs)
+    # return
+
+    image_preprocessor = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    train_dataset = ICErrorDataSet(X, Y, text_tokenizer, image_preprocessor)
+    train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
+
+    my_model = CaptionErrorDetectorBase()
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(my_model.parameters(),
+            lr = 5e-5, # args.learning_rate - default is 5e-5
+            eps = 1e-5
+        )
+    max_epochs = 2
+    for epoch in range(max_epochs):
+        # Training the model.
+        my_model.train()
+        for local_batch, local_labels in train_dataloader:
+            # print(local_batch, local_labels)
+            optimizer.zero_grad()
+
+            outputs = my_model(local_batch)
+            loss = criterion(outputs, local_labels)
+            loss.backward()
+            optimizer.step()
+
+            print('loss={:.3g}'.format(loss))
+    print('done')
 
 
 def test_image_model():
@@ -342,7 +343,9 @@ if __name__ == '__main__':
     # load_data()
     # test_image_model()
     # load_train_val_data()
-    train_model(num_examples=20, batch_size=10)
+    max_epochs = 5
+    print("Epoch = " + str(max_epochs))
+    train_model(num_examples=2000, batch_size=100, max_epochs=max_epochs)
     sys.exit(0)
 
 """
