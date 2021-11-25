@@ -208,12 +208,11 @@ def persist_model(my_model, path_root="../checkpoint/", append_name="") -> str:
     return save_path
 
 
-def load_model_from_disk(save_path: str) -> nn.Module:
-    my_model = CaptionErrorDetectorBase()
-    my_model.load_state_dict(torch.load(save_path))
-    my_model.eval()
+def load_model_from_disk(save_path: str, empty_model: nn.Module) -> nn.Module:
+    empty_model.load_state_dict(torch.load(save_path))
+    empty_model.eval()
     print('Model loaded from path {} successfully.'.format(save_path))
-    return my_model
+    return empty_model
 
 
 def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
@@ -442,8 +441,8 @@ def test_image_model():
 
 def find_generalization_performance(best_model_save_path: str):
     print('Finding test time performance.')
-    test_loader = load_test_data(num_examples=512)
-    test_model = load_model_from_disk(best_model_save_path)
+    test_loader = load_test_data(num_examples=2048)
+    test_model = load_model_from_disk(best_model_save_path, CaptionErrorDetectorBase())
     test_model.to(device)
     validate(test_loader, test_model, nn.CrossEntropyLoss(), log_metrics=False)
 
@@ -452,14 +451,14 @@ if __name__ == '__main__':
     # test_image_model()
 
     # Save data locally so that training is faster.
-    load_train_val_data(num_examples=10_000, batch_size=100)
-    load_test_data(num_examples=1000, batch_size=64)
-    persist_invalid_urls()
+    # load_train_val_data(num_examples=20_000, batch_size=100)
+    # load_test_data(num_examples=2048, batch_size=64)
+    # persist_invalid_urls()
 
     # Perform actual training followed by test-time performance check.
-    # max_epochs = 5
-    # best_model_train_path = train_model(num_examples=10_000, batch_size=100, max_epochs=max_epochs, print_every=10)
-    # find_generalization_performance(best_model_train_path)
+    max_epochs = 6
+    best_model_train_path = train_model(num_examples=20_000, batch_size=100, max_epochs=max_epochs, print_every=20)
+    find_generalization_performance(best_model_train_path)
     sys.exit(0)
 
 """
