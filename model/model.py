@@ -1,4 +1,5 @@
 import os
+import pickle
 import sys
 import urllib
 from pathlib import Path
@@ -29,6 +30,19 @@ if torch.cuda.is_available():
 print(device)
 
 
+def load_invalid_urls() -> set:
+    with open('../data/invalid_urls.pickle', 'rb') as f:
+        return pickle.load(f)
+
+
+invalid_urls = load_invalid_urls()
+
+
+def persist_invalid_urls():
+    with open('../data/invalid_urls.pickle', 'wb') as f:
+        pickle.dump(invalid_urls, f, pickle.HIGHEST_PROTOCOL)
+
+
 class ICErrorDataSet(Dataset):
 
     def __init__(self, X, y, text_tokenizer, image_preprocessor):
@@ -37,8 +51,11 @@ class ICErrorDataSet(Dataset):
         valid_indices1 = []
         # Save all images locally.
         for i, row in enumerate(X):
-            if self._save_image_locally(row[1], row[2]):
-                valid_indices1.append(i)
+            if row[1] not in invalid_urls:
+                if self._save_image_locally(row[1], row[2]):
+                    valid_indices1.append(i)
+                else:
+                    invalid_urls.add(row[1])
 
         # Pre-process images and save as tensors.
         self.image_encodings = []
@@ -53,6 +70,7 @@ class ICErrorDataSet(Dataset):
                 valid_indices2.append(i)
             except Exception as e:
                 error_count += 1
+                invalid_urls.add(row[1])
 
         print('Errors: {}, locally saved images count: {}, final examples count: {}'.format(
             error_count, len(valid_indices1), len(valid_indices2)
@@ -77,12 +95,14 @@ class ICErrorDataSet(Dataset):
         filepath = self.data_root + filename
         if not Path(filepath).is_file():
             try:
+                print('downloading image {} in {}'.format(url, filepath))
                 urllib.URLopener().retrieve(url, filepath)
             except Exception as e1:
                 try:
-                    # print(f'Got exception {e1}.')
+                    print(f'Got exception {e1}.')
                     urllib.request.urlretrieve(url, filepath)
                 except Exception as e2:
+                    print(f'Got exception {e2}.')
                     return False
         return True
 
@@ -144,6 +164,7 @@ def load_test_data(num_examples, batch_size=64) -> DataLoader:
     print('Loading test data.')
     test_dataset = ICErrorDataSet(X_test, Y_test, text_tokenizer, image_preprocessor)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+    
     return test_dataloader
 
 
@@ -291,11 +312,7 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
         print()
 
     print('training done.')
-    print('Finding test time performance.')
-    test_loader = load_test_data(num_examples=128)
-    test_model = load_model_from_disk(best_model_save_path)
-    test_model.to(device)
-    validate(test_loader, test_model, criterion, log_metrics=False)
+    return best_model_save_path
 
 
 def validate(val_loader, my_model, loss_func, log_metrics=False):
@@ -423,12 +440,26 @@ def test_image_model():
         print(output)
 
 
+def find_generalization_performance(best_model_save_path: str):
+    print('Finding test time performance.')
+    test_loader = load_test_data(num_examples=512)
+    test_model = load_model_from_disk(best_model_save_path)
+    test_model.to(device)
+    validate(test_loader, test_model, nn.CrossEntropyLoss(), log_metrics=False)
+
+
 if __name__ == '__main__':
-    # load_data()
     # test_image_model()
-    # load_train_val_data()
-    max_epochs = 1
-    train_model(num_examples=64, batch_size=8, max_epochs=max_epochs, print_every=2)
+
+    # Save data locally so that training is faster.
+    load_train_val_data(num_examples=10_000, batch_size=100)
+    load_test_data(num_examples=1000, batch_size=64)
+    persist_invalid_urls()
+
+    # Perform actual training followed by test-time performance check.
+    # max_epochs = 5
+    # best_model_train_path = train_model(num_examples=10_000, batch_size=100, max_epochs=max_epochs, print_every=10)
+    # find_generalization_performance(best_model_train_path)
     sys.exit(0)
 
 """
