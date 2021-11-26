@@ -1,5 +1,6 @@
 import os
 import urllib
+from enum import Enum
 from pathlib import Path
 
 import numpy as np
@@ -135,25 +136,6 @@ class ImageCaptioningModel(nn.Module):
         )
         self.name = "Encoder_{}_Decoder_{}".format(pretrained_encoder_name, pretrained_decoder_name).replace('/', '-')
 
-        # tokenizer = _load_pretrained_tokenizer(pretrained_decoder_name)
-        # self.model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
-        #     'google/vit-base-patch16-224-in21k',
-        #     # 'google/vit-base-patch16-224',
-        #     pretrained_decoder_name
-        # )
-        #
-        # if pretrained_decoder_name == 'gpt2':
-        #     self.model.config.eos_token_id = self.model.config.decoder.eos_token_id
-        #     self.model.config.pad_token_id = self.model.config.eos_token_id
-        #     self.model.config.decoder_start_token_id = tokenizer.eos_token_id
-        # else:
-        #     self.model.config.pad_token_id = tokenizer.pad_token_id
-        #     self.model.config.decoder_start_token_id = tokenizer.cls_token_id
-        # self.model.config.vocab_size = self.model.config.decoder.vocab_size
-        # self.name = "ViT_encoder_21k+Gpt_decoder"
-        #
-        # self.model.decoder.resize_token_embeddings(len(tokenizer))  # from github training-scripts code.
-
     def forward(self, x):
         # pixel_values has shape (N, 1, C, H, W). We remove the second dimension.
         outputs = self.model(
@@ -285,13 +267,12 @@ def validate_ic(dataloader, my_model, tokenizer, log_metric=False):
 
 
 if __name__ == '__main__':
-    # wandb_mode can be online, offline or disabled.
+    class WandbMode(Enum):
+        ONLINE = "online"
+        OFFLINE = "offline"
+        DISABLED = "disabled"
+
     start_run(
-        num_examples=20, batch_size=32, max_epochs=5, print_every=2, wandb_mode="disabled",
+        num_examples=20, batch_size=32, max_epochs=2, print_every=2, wandb_mode=WandbMode.DISABLED.value,
         # load_pretrained=True, model_checkpoint_path="../checkpoint/ic/ViT_encoder+Bert_decoder_small_data_ep=10"
     )
-
-'''
-TODO:
-Train till loss is zero for small data.
-'''
