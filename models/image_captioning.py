@@ -1,3 +1,4 @@
+import os
 import urllib
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import requests
 import torch
 import numpy as np
 import pandas as pd
+import wandb
 from PIL import Image
 from sklearn.model_selection import train_test_split
 from torch import nn, optim
@@ -95,7 +97,10 @@ class ImageCaptioningModel(nn.Module):
         return outputs
 
 
-def test_dataset(num_examples=10, batch_size=16):
+def start_run(
+        num_examples=10, batch_size=16, print_every=1, max_epochs=5,
+        load_pretrained=False, model_checkpoint_path=None
+):
     train_data = pd.read_csv(
         '../data/train_data/part-00000-079f7de7-8645-4478-a8dd-f3249585db1c-c000.csv',
         escapechar='\\',
@@ -116,14 +121,32 @@ def test_dataset(num_examples=10, batch_size=16):
     train_dataset = ImageCaptioningDataset(X_train, y_train, tokenizer, feature_extractor)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-    my_model = ImageCaptioningModel()
+    val_dataset = ImageCaptioningDataset(X_test, y_test, tokenizer, feature_extractor)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
+
+    if load_pretrained:
+        my_model = load_model_from_disk(model_checkpoint_path, ImageCaptioningModel())
+    else:
+        my_model = ImageCaptioningModel()
     my_model.to(device)
     optimizer = optim.AdamW(my_model.parameters(),
-                            lr=1e-4,
+                            lr=5e-4,
                             eps=1e-5
                             )
-    max_epochs = 5
     persist_path = None
+
+    # Initialize wandb and add variables that you want associate with this run.
+    os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')
+    config = {
+        "learning_rate": 5e-4,
+        "train_size": len(train_dataloader.dataset),
+        "epochs": max_epochs,
+        "batch_size": batch_size,
+        "print_every": 0,
+        "architecture": my_model.name,
+        "dataset": "FOIL-COCO"
+    }
+    wandb.init(project="cs682-image-captioning", entity="682f21team", config=config)
 
     for epoch in tqdm(range(max_epochs)):
         # print(f'Epoch: {epoch + 1}')
@@ -140,22 +163,55 @@ def test_dataset(num_examples=10, batch_size=16):
 
             train_running_loss += loss.item()
             # print('train batch loss = {}'.format(loss.item()))
+            if i % print_every == 0:
+                validate_ic(val_dataloader, my_model, tokenizer, log_metric=True)
         print('\nep={}, train epoch loss = {}'.format(epoch + 1, train_running_loss))
-        persist_path = persist_model(my_model, path_root="../checkpoint/ic/", append_name="_small_data")
+        validate_ic(val_dataloader, my_model, tokenizer, log_metric=True)
+        wandb.log({
+            'train_loss': train_running_loss
+        })
+        persist_path = persist_model(my_model, path_root="../checkpoint/ic/", append_name="_small_data_lr5e-4")
 
+    # Check predictions on training data.
     trained_model = load_model_from_disk(persist_path, ImageCaptioningModel())
     trained_model.to(device)
+    train_running_loss = 0
     for i, batch in enumerate(train_dataloader):
         for k, v in batch.items():
             batch[k] = v.to(device)
         with torch.no_grad():
+            outputs = trained_model(batch)
+            train_running_loss += outputs.loss
+
             gen_ids = trained_model.model.generate(batch['pixel_values'].squeeze(dim=1))
-            outputs = tokenizer.batch_decode(gen_ids)
-            print('outputs={}'.format(outputs))
+            decoded_text = tokenizer.batch_decode(gen_ids)
+            print('decoded_text={}'.format(decoded_text))
+    print(f'train loss with trained model = {train_running_loss}')  # just for sanity check.
     print('done')
 
 
-def process():
+def validate_ic(dataloader, my_model, tokenizer, log_metric=False):
+    my_model.eval()
+    my_model.to(device)
+    val_running_loss = 0
+    for i, batch in enumerate(dataloader):
+        for k, v in batch.items():
+            batch[k] = v.to(device)
+        with torch.no_grad():
+            outputs = my_model(batch)
+            val_running_loss += outputs.loss.item()
+
+            gen_ids = my_model.model.generate(batch['pixel_values'].squeeze(dim=1))
+            decoded_text = tokenizer.batch_decode(gen_ids)
+            print('decoded_text={}'.format(decoded_text))
+    print(f'val loss = {val_running_loss}')
+    if log_metric:
+        wandb.log({
+            'val_loss': val_running_loss
+        })
+
+
+def test_process():
     feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224')
     url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
     image = Image.open(requests.get(url, stream=True).raw)
@@ -185,13 +241,15 @@ def process():
 
 
 if __name__ == '__main__':
-    # process()
-    test_dataset()
+    # test_process()
+
+    start_run(
+        num_examples=10, batch_size=16, max_epochs=50,
+        load_pretrained=True, model_checkpoint_path="../checkpoint/ic/ViT_encoder+RoBerta_decoder_small_data"
+    )
 
 '''
 TODO:
-Move tensors to GPU.
 Train till loss is zero for small data.
-Do caption prediction for train data and val data.
 Add wandb tracking.
 '''
