@@ -12,7 +12,7 @@ from torch import nn, optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import ViTFeatureExtractor, VisionEncoderDecoderModel, ViTModel, RobertaTokenizer, \
-    BertTokenizer
+    BertTokenizer, GPT2Tokenizer
 
 from models.model import load_invalid_urls, persist_model, load_model_from_disk
 
@@ -27,6 +27,48 @@ print('device={}'.format(device))
 
 
 invalid_urls = load_invalid_urls()
+
+# Change the indices below to choose a specific encoder and decoder.
+pretrained_encoder_name = ['google/vit-base-patch16-224-in21k', 'google/vit-base-patch16-224'][0]
+pretrained_decoder_name = ['roberta-base', 'bert-base-uncased', 'gpt2'][2]
+
+
+def load_pretrained_tokenizer(tokenizer_name: str, model_max_length: int):
+    if tokenizer_name == 'roberta-base':
+        tok = RobertaTokenizer.from_pretrained(tokenizer_name, model_max_length=model_max_length)
+    elif tokenizer_name == 'bert-base-uncased':
+        tok = BertTokenizer.from_pretrained('bert-base-uncased', model_max_length=model_max_length)
+    elif tokenizer_name == 'gpt2':
+        tok = GPT2Tokenizer.from_pretrained(pretrained_decoder_name, model_max_length=model_max_length)
+        tok.pad_token = tok.eos_token_id
+    else:
+        raise Exception('Tokenizer name {} isn\'t supported yet'.format(tokenizer_name))
+    return tok
+
+
+def load_encoder_decoder_model_and_tokenizer(
+        encoder_pretrained_model_name,
+        decoder_pretrained_model_name,
+        model_max_length=20
+):
+    tokenizer = load_pretrained_tokenizer(decoder_pretrained_model_name, model_max_length)
+    model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
+        encoder_pretrained_model_name,
+        decoder_pretrained_model_name
+    )
+
+    # Make some modifications to the model parameters based on decoder/tokenizer.
+    if decoder_pretrained_model_name == 'gpt2':
+        model.config.eos_token_id = model.config.decoder.eos_token_id
+        model.config.pad_token_id = model.config.eos_token_id
+        model.config.decoder_start_token_id = tokenizer.eos_token_id
+    else:
+        model.config.pad_token_id = tokenizer.pad_token_id
+        model.config.decoder_start_token_id = tokenizer.cls_token_id
+    model.config.vocab_size = model.config.decoder.vocab_size
+    model.decoder.resize_token_embeddings(len(tokenizer))
+
+    return model, tokenizer
 
 
 class ImageCaptioningDataset(Dataset):
@@ -43,6 +85,7 @@ class ImageCaptioningDataset(Dataset):
             sentences.append(X[idx][0])
 
         self.encoded_text = tokenizer(sentences, truncation=True, padding=True)
+        print(f'original sentences = {sentences}')
         print('dataset initialized.')
 
     def __getitem__(self, index):
@@ -86,17 +129,30 @@ class ImageCaptioningDataset(Dataset):
 class ImageCaptioningModel(nn.Module):
     def __init__(self):
         super().__init__()
-        # tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', model_max_length=20)
-        self.model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
-            'google/vit-base-patch16-224', 'bert-base-uncased'
+        self.model, tokenizer = load_encoder_decoder_model_and_tokenizer(
+            pretrained_encoder_name,
+            pretrained_decoder_name
         )
-        self.model.config.decoder_start_token_id = tokenizer.cls_token_id
-        self.model.config.pad_token_id = tokenizer.pad_token_id
-        self.model.config.vocab_size = self.model.config.decoder.vocab_size
-        self.name = "ViT_encoder+Bert_decoder"
+        self.name = "Encoder_{}_Decoder_{}".format(pretrained_encoder_name, pretrained_decoder_name).replace('/', '-')
 
-        self.model.decoder.resize_token_embeddings(len(tokenizer))  # from github training-scripts code.
+        # tokenizer = _load_pretrained_tokenizer(pretrained_decoder_name)
+        # self.model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
+        #     'google/vit-base-patch16-224-in21k',
+        #     # 'google/vit-base-patch16-224',
+        #     pretrained_decoder_name
+        # )
+        #
+        # if pretrained_decoder_name == 'gpt2':
+        #     self.model.config.eos_token_id = self.model.config.decoder.eos_token_id
+        #     self.model.config.pad_token_id = self.model.config.eos_token_id
+        #     self.model.config.decoder_start_token_id = tokenizer.eos_token_id
+        # else:
+        #     self.model.config.pad_token_id = tokenizer.pad_token_id
+        #     self.model.config.decoder_start_token_id = tokenizer.cls_token_id
+        # self.model.config.vocab_size = self.model.config.decoder.vocab_size
+        # self.name = "ViT_encoder_21k+Gpt_decoder"
+        #
+        # self.model.decoder.resize_token_embeddings(len(tokenizer))  # from github training-scripts code.
 
     def forward(self, x):
         # pixel_values has shape (N, 1, C, H, W). We remove the second dimension.
@@ -126,9 +182,10 @@ def start_run(
     Y = np.array(target) * 1
     X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.1, random_state=10)
 
-    # tokenizer = RobertaTokenizer.from_pretrained('roberta-base', model_max_length=20)
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', model_max_length=20)
-    feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224')
+    tokenizer = load_pretrained_tokenizer(pretrained_decoder_name, model_max_length=20)
+    feature_extractor = ViTFeatureExtractor.from_pretrained(
+        pretrained_encoder_name
+    )
 
     train_dataset = ImageCaptioningDataset(X_train, y_train, tokenizer, feature_extractor)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -175,7 +232,7 @@ def start_run(
 
             train_running_loss += loss.item()
             # print('train batch loss = {}'.format(loss.item()))
-            if i % print_every == 0:
+            if (i + 1) % print_every == 0:
                 validate_ic(val_dataloader, my_model, tokenizer, log_metric=True)
         print('\nep={}, train epoch loss = {}'.format(epoch + 1, train_running_loss))
         validate_ic(val_dataloader, my_model, tokenizer, log_metric=True)
@@ -200,8 +257,8 @@ def start_run(
             train_running_loss += outputs.loss
 
             gen_ids = trained_model.model.generate(batch['pixel_values'].squeeze(dim=1))
-            decoded_text = tokenizer.batch_decode(gen_ids)
-            print('decoded_text={}'.format(decoded_text))
+            decoded_text = tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
+            print('decoded_train_text={}'.format(decoded_text))
     print(f'train loss with trained model = {train_running_loss}')  # just for sanity check.
     print('done')
 
@@ -230,12 +287,11 @@ def validate_ic(dataloader, my_model, tokenizer, log_metric=False):
 if __name__ == '__main__':
     # wandb_mode can be online, offline or disabled.
     start_run(
-        num_examples=10, batch_size=16, max_epochs=2, print_every=2, wandb_mode="disabled",
+        num_examples=20, batch_size=32, max_epochs=5, print_every=2, wandb_mode="disabled",
         # load_pretrained=True, model_checkpoint_path="../checkpoint/ic/ViT_encoder+Bert_decoder_small_data_ep=10"
     )
 
 '''
 TODO:
 Train till loss is zero for small data.
-Add wandb tracking.
 '''
