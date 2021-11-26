@@ -38,9 +38,9 @@ def load_pretrained_tokenizer(tokenizer_name: str, model_max_length: int):
     if tokenizer_name == 'roberta-base':
         tok = RobertaTokenizer.from_pretrained(tokenizer_name, model_max_length=model_max_length)
     elif tokenizer_name == 'bert-base-uncased':
-        tok = BertTokenizer.from_pretrained('bert-base-uncased', model_max_length=model_max_length)
+        tok = BertTokenizer.from_pretrained(tokenizer_name, model_max_length=model_max_length)
     elif tokenizer_name == 'gpt2':
-        tok = GPT2Tokenizer.from_pretrained(pretrained_decoder_name, model_max_length=model_max_length)
+        tok = GPT2Tokenizer.from_pretrained(tokenizer_name, model_max_length=model_max_length)
         tok.pad_token = tok.eos_token_id
     else:
         raise Exception('Tokenizer name {} isn\'t supported yet'.format(tokenizer_name))
