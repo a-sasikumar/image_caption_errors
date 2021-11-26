@@ -2,17 +2,17 @@ import os
 import urllib
 from pathlib import Path
 
-import requests
-import torch
 import numpy as np
 import pandas as pd
+import torch
 import wandb
 from PIL import Image
 from sklearn.model_selection import train_test_split
 from torch import nn, optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from transformers import ViTFeatureExtractor, VisionEncoderDecoderModel, ViTModel, RobertaTokenizer
+from transformers import ViTFeatureExtractor, VisionEncoderDecoderModel, ViTModel, RobertaTokenizer, \
+    BertTokenizer
 
 from models.model import load_invalid_urls, persist_model, load_model_from_disk
 
@@ -43,11 +43,13 @@ class ImageCaptioningDataset(Dataset):
             sentences.append(X[idx][0])
 
         self.encoded_text = tokenizer(sentences, truncation=True, padding=True)
+        print('dataset initialized.')
 
     def __getitem__(self, index):
         encodings = {
             'pixel_values': self.encoded_images[index].pixel_values,
-            'labels': torch.tensor(self.encoded_text['input_ids'][index])
+            'labels': torch.tensor(self.encoded_text['input_ids'][index]),
+            'attention_mask': torch.tensor(self.encoded_text['attention_mask'][index])
         }
         return encodings
 
@@ -84,21 +86,30 @@ class ImageCaptioningDataset(Dataset):
 class ImageCaptioningModel(nn.Module):
     def __init__(self):
         super().__init__()
-        tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-        self.model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained('google/vit-base-patch16-224', 'roberta-base')
-        self.model.config.decoder_start_token_id = tokenizer.bos_token_id
+        # tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', model_max_length=20)
+        self.model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
+            'google/vit-base-patch16-224', 'bert-base-uncased'
+        )
+        self.model.config.decoder_start_token_id = tokenizer.cls_token_id
         self.model.config.pad_token_id = tokenizer.pad_token_id
         self.model.config.vocab_size = self.model.config.decoder.vocab_size
-        self.name = "ViT_encoder+RoBerta_decoder"
+        self.name = "ViT_encoder+Bert_decoder"
+
+        self.model.decoder.resize_token_embeddings(len(tokenizer))  # from github training-scripts code.
 
     def forward(self, x):
         # pixel_values has shape (N, 1, C, H, W). We remove the second dimension.
-        outputs = self.model(pixel_values=x['pixel_values'].squeeze(dim=1), labels=x['labels'])
+        outputs = self.model(
+            pixel_values=x['pixel_values'].squeeze(dim=1),
+            labels=x['labels'],
+            attention_mask=x['attention_mask']
+        )
         return outputs
 
 
 def start_run(
-        num_examples=10, batch_size=16, print_every=1, max_epochs=5,
+        num_examples=10, batch_size=16, print_every=1, max_epochs=5, wandb_mode="online",
         load_pretrained=False, model_checkpoint_path=None
 ):
     train_data = pd.read_csv(
@@ -115,7 +126,8 @@ def start_run(
     Y = np.array(target) * 1
     X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.1, random_state=10)
 
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-base', model_max_length=20)
+    # tokenizer = RobertaTokenizer.from_pretrained('roberta-base', model_max_length=20)
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', model_max_length=20)
     feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224')
 
     train_dataset = ImageCaptioningDataset(X_train, y_train, tokenizer, feature_extractor)
@@ -146,7 +158,7 @@ def start_run(
         "architecture": my_model.name,
         "dataset": "FOIL-COCO"
     }
-    wandb.init(project="cs682-image-captioning", entity="682f21team", config=config)
+    wandb.init(project="cs682-image-captioning", entity="682f21team", config=config, mode=wandb_mode)
 
     for epoch in tqdm(range(max_epochs)):
         # print(f'Epoch: {epoch + 1}')
@@ -206,7 +218,7 @@ def validate_ic(dataloader, my_model, tokenizer, log_metric=False):
             val_running_loss += outputs.loss.item()
 
             gen_ids = my_model.model.generate(batch['pixel_values'].squeeze(dim=1))
-            decoded_text = tokenizer.batch_decode(gen_ids)
+            decoded_text = tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
             print('decoded_val_text={}'.format(decoded_text))
     # print(f'val loss = {val_running_loss}')
     if log_metric:
@@ -215,41 +227,11 @@ def validate_ic(dataloader, my_model, tokenizer, log_metric=False):
         })
 
 
-def test_process():
-    feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224')
-    url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
-    image = Image.open(requests.get(url, stream=True).raw)
-    encoded_image = feature_extractor(images=image, return_tensors="pt")
-
-    image_model = ViTModel.from_pretrained('google/vit-base-patch16-224')
-    image_output = image_model(**encoded_image)
-
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-    text = "Replace me by any text you'd like."
-    encoded_text = tokenizer(text, return_tensors='pt')
-
-    model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained('google/vit-base-patch16-224', 'roberta-base')
-    model.config.decoder_start_token_id = tokenizer.bos_token_id
-    model.config.pad_token_id = tokenizer.pad_token_id
-    model.config.vocab_size = model.config.decoder.vocab_size
-
-    # forward pass for model?
-    output1 = model(decoder_input_ids=encoded_text['input_ids'], pixel_values=encoded_image['pixel_values'])
-    output2 = model(labels=encoded_text['input_ids'], pixel_values=encoded_image['pixel_values'])
-
-    # Inference from model
-    generated_ids = model.generate(encoded_image.pixel_values)
-    generated_text = tokenizer.batch_decode(generated_ids)
-    print(generated_text)
-    print('done')
-
-
 if __name__ == '__main__':
-    # test_process()
-
+    # wandb_mode can be online, offline or disabled.
     start_run(
-        num_examples=10, batch_size=16, max_epochs=2, print_every=2,
-        # load_pretrained=True, model_checkpoint_path="../checkpoint/ic/ViT_encoder+RoBerta_decoder_small_data_lr5e-4"
+        num_examples=10, batch_size=16, max_epochs=2, print_every=2, wandb_mode="disabled",
+        # load_pretrained=True, model_checkpoint_path="../checkpoint/ic/ViT_encoder+Bert_decoder_small_data_ep=10"
     )
 
 '''
