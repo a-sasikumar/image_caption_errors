@@ -170,7 +170,11 @@ def start_run(
         wandb.log({
             'train_loss': train_running_loss
         })
-        persist_path = persist_model(my_model, path_root="../checkpoint/ic/", append_name="_small_data_lr5e-4")
+        persist_path = persist_model(
+            my_model,
+            path_root="../checkpoint/ic/",
+            append_name="_small_data_ep={}".format(max_epochs)
+        )
 
     # Check predictions on training data.
     trained_model = load_model_from_disk(persist_path, ImageCaptioningModel())
@@ -203,8 +207,8 @@ def validate_ic(dataloader, my_model, tokenizer, log_metric=False):
 
             gen_ids = my_model.model.generate(batch['pixel_values'].squeeze(dim=1))
             decoded_text = tokenizer.batch_decode(gen_ids)
-            print('decoded_text={}'.format(decoded_text))
-    print(f'val loss = {val_running_loss}')
+            print('decoded_val_text={}'.format(decoded_text))
+    # print(f'val loss = {val_running_loss}')
     if log_metric:
         wandb.log({
             'val_loss': val_running_loss
@@ -244,8 +248,8 @@ if __name__ == '__main__':
     # test_process()
 
     start_run(
-        num_examples=10, batch_size=16, max_epochs=50,
-        load_pretrained=True, model_checkpoint_path="../checkpoint/ic/ViT_encoder+RoBerta_decoder_small_data"
+        num_examples=10, batch_size=16, max_epochs=2, print_every=2,
+        # load_pretrained=True, model_checkpoint_path="../checkpoint/ic/ViT_encoder+RoBerta_decoder_small_data_lr5e-4"
     )
 
 '''
