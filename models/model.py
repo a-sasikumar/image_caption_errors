@@ -17,7 +17,6 @@ import torchvision
 from tqdm import tqdm
 from transformers import DistilBertModel, DistilBertTokenizer
 from sklearn.model_selection import train_test_split
-import wandb
 
 device = torch.device('cpu')
 # set computation device
@@ -30,12 +29,13 @@ if torch.cuda.is_available():
 print(device)
 
 
-def load_invalid_urls() -> set:
-    with open('../data/invalid_urls.pickle', 'rb') as f:
-        return pickle.load(f)
+# def load_invalid_urls() -> set:
+#     with open('../data/invalid_urls.pickle', 'rb') as f:
+#         return pickle.load(f)
 
 
-invalid_urls = load_invalid_urls()
+# invalid_urls = load_invalid_urls()
+invalid_urls = set()
 
 
 def persist_invalid_urls():
@@ -56,6 +56,7 @@ class ICErrorDataSet(Dataset):
                     valid_indices1.append(i)
                 else:
                     invalid_urls.add(row[1])
+        print("Download Complete")
 
         # Pre-process images and save as tensors.
         self.image_encodings = []
@@ -96,7 +97,7 @@ class ICErrorDataSet(Dataset):
         if not Path(filepath).is_file():
             try:
                 print('downloading image {} in {}'.format(url, filepath))
-                urllib.URLopener().retrieve(url, filepath)
+                urllib.request.FancyURLopener().retrieve(url, filepath)
             except Exception as e1:
                 try:
                     print(f'Got exception {e1}.')
@@ -215,7 +216,7 @@ def load_model_from_disk(save_path: str, empty_model: nn.Module) -> nn.Module:
     return empty_model
 
 
-def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
+def train_model(model, loss, optimizer, num_examples=30, batch_size=10, max_epochs=10, print_every=1, log_metrics = True):
     print('Training started with num_example={}, batch_size={}, max_epochs={}'.format(
         num_examples, batch_size, max_epochs
     ))
@@ -226,26 +227,24 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
     train_loader, val_loader = load_train_val_data(num_examples=num_examples, batch_size=batch_size)
     print('Data loaded.')
 
-    my_model = CaptionErrorDetectorBase()
-    my_model.to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(my_model.parameters(),
-                            lr=1e-4,
-                            eps=1e-5
-                            )
+    my_model = model
+    model.to(device)
+    criterion = loss
 
-    # Initialize wandb and add variables that you want associate with this run.
-    os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')
-    config = {
-        "learning_rate": 1e-4,
-        "train_size": len(train_loader.dataset),
-        "epochs": max_epochs,
-        "batch_size": batch_size,
-        "print_every": print_every,
-        "architecture": my_model.name,
-        "dataset": "FOIL-COCO"
-    }
-    wandb.init(project="cs682-image-captioning", entity="682f21team", config=config)
+    if(log_metrics):
+        import wandb
+        # Initialize wandb and add variables that you want associate with this run.
+        os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')
+        config = {
+            "learning_rate": 1e-4,
+            "train_size": len(train_loader.dataset),
+            "epochs": max_epochs,
+            "batch_size": batch_size,
+            "print_every": print_every,
+            "architecture": my_model.name,
+            "dataset": "FOIL-COCO"
+        }
+        wandb.init(project="cs682-image-captioning", entity="682f21team", config=config)
 
     best_val_acc = 0
     best_model_save_path = None
@@ -292,19 +291,21 @@ def train_model(num_examples=30, batch_size=10, max_epochs=10, print_every=1):
             train_correct += train_batch_correct
 
             if i % print_every == 0:
-                val_loss, val_acc = validate(val_loader, my_model, criterion, log_metrics=True)
+                val_loss, val_acc = validate(val_loader, my_model, criterion, log_metrics=log_metrics)
                 if val_acc > best_val_acc:
                     best_model_save_path = persist_model(my_model, append_name=custom_name)
                     best_val_acc = val_acc
-                wandb.log({'train_batch_loss': train_batch_loss})
+                if(log_metrics):
+                    wandb.log({'train_batch_loss': train_batch_loss})
 
         train_accuracy = 100 * train_correct / len(train_loader.dataset)
         print(f'\nEpoch: {epoch + 1}\nTrain Loss: {train_loss:.4f}, Train Acc: {train_accuracy}')
-        wandb.log({
-            'train_accuracy': train_accuracy,
-            'train_loss': train_loss
-        })
-        val_loss, val_acc = validate(val_loader, my_model, criterion, log_metrics=True)
+        if(log_metrics):
+            wandb.log({
+                'train_accuracy': train_accuracy,
+                'train_loss': train_loss
+            })
+        val_loss, val_acc = validate(val_loader, my_model, criterion, log_metrics=False)
         if val_acc > best_val_acc:
             best_model_save_path = persist_model(my_model, append_name=custom_name)
             best_val_acc = val_acc
@@ -413,11 +414,8 @@ def test_load_data():
 
 def test_image_model():
     url, filename = ("https://github.com/pytorch/hub/raw/master/images/dog.jpg", "../data/dog.jpg")
-    try:
-        urllib.URLopener().retrieve(url, filename)
-    except Exception as e:
-        print(f'Got exception {e}.')
-        urllib.request.urlretrieve(url, filename)
+    print(f'Got exception {e}.')
+    urllib.request.urlretrieve(url, filename)
 
     input_image = Image.open(filename)
     preprocess = transforms.Compose([
@@ -457,7 +455,22 @@ if __name__ == '__main__':
 
     # Perform actual training followed by test-time performance check.
     max_epochs = 6
-    best_model_train_path = train_model(num_examples=20_000, batch_size=100, max_epochs=max_epochs, print_every=20)
+    my_model = CaptionErrorDetectorBase()
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(my_model.parameters(),
+                            lr=1e-4,
+                            eps=1e-5
+                                )
+    best_model_train_path = train_model(
+        model = my_model,
+        loss = criterion,
+        optimizer = optimizer,
+        num_examples=20_000,
+        batch_size=100,
+        max_epochs=max_epochs,
+        print_every=20,
+        log_metrics = False
+    )
     find_generalization_performance(best_model_train_path)
     sys.exit(0)
 
