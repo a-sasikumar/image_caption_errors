@@ -234,7 +234,7 @@ def start_run(
         "train_size": len(train_dataloader.dataset),
         "epochs": max_epochs,
         "batch_size": batch_size,
-        "print_every": 0,
+        "print_every": print_every,
         "architecture": my_model.name,
         "dataset": "FOIL-COCO"
     }
@@ -255,10 +255,14 @@ def start_run(
             loss.backward()
             optimizer.step()
 
-            train_running_loss += loss.item()
+            train_batch_loss = loss.item()
+            train_running_loss += train_batch_loss
             # print('train batch loss = {}'.format(loss.item()))
             if (i + 1) % print_every == 0:
                 _ = validate_ic(val_dataloader, my_model, tokenizer, log_metric=True)
+                wandb.log({
+                    'train_batch_loss': train_batch_loss
+                })
         print('\nep={}, train epoch loss = {}'.format(epoch + 1, train_running_loss))
         val_loss = validate_ic(val_dataloader, my_model, tokenizer, log_metric=True, print_predictions=True)
         wandb.log({
@@ -299,6 +303,13 @@ def start_run(
     print('done')
 
 
+def access_performance(model_checkpoint_path, num_examples=100, batch_size=16):
+    train_dataloader, val_dataloader = get_train_val_dataloaders(num_examples, batch_size, target_foil=False)
+    tokenizer = load_pretrained_tokenizer(pretrained_decoder_name, model_max_length=20)
+    my_model = load_model_from_disk(model_checkpoint_path, ImageCaptioningModel())
+    validate_ic(val_dataloader, my_model, tokenizer, False, True)
+
+
 def validate_ic(dataloader, my_model, tokenizer, log_metric=False, print_predictions=False):
     my_model.eval()
     my_model.to(device)
@@ -311,7 +322,12 @@ def validate_ic(dataloader, my_model, tokenizer, log_metric=False, print_predict
             val_running_loss += outputs.loss.item()
 
             if print_predictions:
-                gen_ids = my_model.model.generate(batch['pixel_values'].squeeze(dim=1))
+                # gen_ids = my_model.model.generate(
+                #     batch['pixel_values'].squeeze(dim=1)
+                # )
+                gen_ids = my_model.model.generate(
+                    batch['pixel_values'].squeeze(dim=1), num_beams=4, max_length=20
+                )
                 decoded_text = tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
                 print('decoded_val_text={}'.format(decoded_text))
     if log_metric:
@@ -429,12 +445,14 @@ if __name__ == '__main__':
         DISABLED = "disabled"
 
     start_run(
-        num_examples=1000, batch_size=16, max_epochs=10, print_every=1, wandb_mode=WandbMode.ONLINE.value,
+        num_examples=1000, batch_size=16, max_epochs=10, print_every=2, wandb_mode=WandbMode.ONLINE.value,
         save_model=True,
-        load_pretrained=True, model_checkpoint_path="../checkpoint/ic/Encoder_google-vit-base-patch16-224-in21k_Decoder_gpt2_lr=0.001_tr=785_bs=16_ep=1_last_ep.pt"
+        # load_pretrained=True, model_checkpoint_path="../checkpoint/ic/Encoder_google-vit-base-patch16-224_Decoder_gpt2_lr=0.001_tr=785_bs=16_ep=10_last_ep.pt"
     )
 
     # probability_distribution_of_caption(
     #     "../checkpoint/ic/Encoder_google-vit-base-patch16-224-in21k_Decoder_gpt2_small_data_ep=2",
     #     num_examples=5, batch_size=5
     # )
+
+    # access_performance("../checkpoint/ic/Encoder_google-vit-base-patch16-224-in21k_Decoder_gpt2_lr=0.002_tr=785_bs=16_ep=10_last_ep.pt")
