@@ -88,7 +88,7 @@ class ImageCaptioningDataset(Dataset):
             if len(row) >= 4:
                 self.foil_word.append(row[3])
         self.encoded_text = tokenizer(sentences, truncation=True, padding=True)
-        # print(f'original sentences = {sentences}')
+        print(f'original sentences = {sentences}')
         print('dataset initialized.')
 
     def __getitem__(self, index):
@@ -210,7 +210,7 @@ def get_train_val_dataloaders(num_examples=10, batch_size=16, target_foil=None):
 
 def start_run(
         num_examples=10, batch_size=16, print_every=1, max_epochs=5, wandb_mode="online",
-        load_pretrained=False, model_checkpoint_path=None
+        load_pretrained=False, model_checkpoint_path=None, save_model=True
 ):
     train_dataloader, val_dataloader = get_train_val_dataloaders(num_examples, batch_size, target_foil=False)
     tokenizer = load_pretrained_tokenizer(pretrained_decoder_name, model_max_length=20)
@@ -220,8 +220,9 @@ def start_run(
     else:
         my_model = ImageCaptioningModel()
     my_model.to(device)
+    lr = 1e-3
     optimizer = optim.AdamW(my_model.parameters(),
-                            lr=5e-4,
+                            lr=lr,
                             eps=1e-5
                             )
     persist_path = None
@@ -229,7 +230,7 @@ def start_run(
     # Initialize wandb and add variables that you want associate with this run.
     os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')
     config = {
-        "learning_rate": 5e-4,
+        "learning_rate": lr,
         "train_size": len(train_dataloader.dataset),
         "epochs": max_epochs,
         "batch_size": batch_size,
@@ -239,6 +240,7 @@ def start_run(
     }
     wandb.init(project="cs682-image-captioning", entity="682f21team", config=config, mode=wandb_mode)
 
+    best_val_loss = np.inf
     for epoch in tqdm(range(max_epochs)):
         # print(f'Epoch: {epoch + 1}')
         my_model.train()
@@ -246,6 +248,7 @@ def start_run(
         for i, batch in enumerate(train_dataloader):
             for k, v in batch.items():
                 batch[k] = v.to(device)
+                batch[k].requires_grad = False
             optimizer.zero_grad()
             outputs = my_model(batch)
             loss = outputs.loss
@@ -255,37 +258,48 @@ def start_run(
             train_running_loss += loss.item()
             # print('train batch loss = {}'.format(loss.item()))
             if (i + 1) % print_every == 0:
-                validate_ic(val_dataloader, my_model, tokenizer, log_metric=True)
+                _ = validate_ic(val_dataloader, my_model, tokenizer, log_metric=True)
         print('\nep={}, train epoch loss = {}'.format(epoch + 1, train_running_loss))
-        validate_ic(val_dataloader, my_model, tokenizer, log_metric=True)
+        val_loss = validate_ic(val_dataloader, my_model, tokenizer, log_metric=True, print_predictions=True)
         wandb.log({
             'train_loss': train_running_loss
         })
-        persist_path = persist_model(
-            my_model,
-            path_root="../checkpoint/ic/",
-            append_name="_small_data_ep={}".format(max_epochs)
-        )
+        if val_loss < best_val_loss or epoch == max_epochs - 1:
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+            if save_model:
+                append_name = "_lr={}_tr={}_bs={}_ep={}".format(
+                    lr, len(train_dataloader.dataset), batch_size, max_epochs
+                )
+                if epoch == max_epochs - 1:
+                    append_name += "_last_ep"
+                persist_path = persist_model(
+                    my_model,
+                    path_root="../checkpoint/ic/",
+                    append_name=append_name
+                )
 
     # Check predictions on training data.
-    trained_model = load_model_from_disk(persist_path, ImageCaptioningModel())
-    trained_model.to(device)
-    train_running_loss = 0
-    for i, batch in enumerate(train_dataloader):
-        for k, v in batch.items():
-            batch[k] = v.to(device)
-        with torch.no_grad():
-            outputs = trained_model(batch)
-            train_running_loss += outputs.loss
+    check_predictions_on_train = False
+    if persist_path and check_predictions_on_train:
+        trained_model = load_model_from_disk(persist_path, ImageCaptioningModel())
+        trained_model.to(device)
+        train_running_loss = 0
+        for i, batch in enumerate(train_dataloader):
+            for k, v in batch.items():
+                batch[k] = v.to(device)
+            with torch.no_grad():
+                outputs = trained_model(batch)
+                train_running_loss += outputs.loss
 
-            gen_ids = trained_model.model.generate(batch['pixel_values'].squeeze(dim=1))
-            decoded_text = tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
-            print('decoded_train_text={}'.format(decoded_text))
-    print(f'train loss with trained model = {train_running_loss}')  # just for sanity check.
+                gen_ids = trained_model.model.generate(batch['pixel_values'].squeeze(dim=1))
+                decoded_text = tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
+                print('decoded_train_text={}'.format(decoded_text))
+        print(f'train loss with trained model = {train_running_loss}')
     print('done')
 
 
-def validate_ic(dataloader, my_model, tokenizer, log_metric=False):
+def validate_ic(dataloader, my_model, tokenizer, log_metric=False, print_predictions=False):
     my_model.eval()
     my_model.to(device)
     val_running_loss = 0
@@ -296,14 +310,15 @@ def validate_ic(dataloader, my_model, tokenizer, log_metric=False):
             outputs = my_model(batch)
             val_running_loss += outputs.loss.item()
 
-            gen_ids = my_model.model.generate(batch['pixel_values'].squeeze(dim=1))
-            decoded_text = tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
-            print('decoded_val_text={}'.format(decoded_text))
-    # print(f'val loss = {val_running_loss}')
+            if print_predictions:
+                gen_ids = my_model.model.generate(batch['pixel_values'].squeeze(dim=1))
+                decoded_text = tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
+                print('decoded_val_text={}'.format(decoded_text))
     if log_metric:
         wandb.log({
             'val_loss': val_running_loss
         })
+    return val_running_loss
 
 
 def find_label_scores(model, my_labels, pixel_values, attention_mask, eos_token_id):
@@ -343,15 +358,13 @@ def find_label_scores(model, my_labels, pixel_values, attention_mask, eos_token_
     return torch.tensor(scores, dtype=torch.float32)
 
 
-def probability_distribution_of_caption():
-    persist_path = "../checkpoint/ic/Encoder_google-vit-base-patch16-224-in21k_Decoder_gpt2_small_data_ep=2"
-
-    trained_model = load_model_from_disk(persist_path, ImageCaptioningModel())
+def probability_distribution_of_caption(model_checkpoint_path: str, num_examples=5, batch_size=5):
+    trained_model = load_model_from_disk(model_checkpoint_path, ImageCaptioningModel())
     trained_model.eval()
     trained_model.to(device)
     tokenizer = load_pretrained_tokenizer(pretrained_decoder_name, model_max_length=20)
 
-    test_dataloader = get_test_dataloader(5, 5, foil_only=True)
+    test_dataloader = get_test_dataloader(num_examples, batch_size, foil_only=True)
     for i, batch in enumerate(test_dataloader):
         for k, v in batch.items():
             if k != 'foil_word':
@@ -416,8 +429,12 @@ if __name__ == '__main__':
         DISABLED = "disabled"
 
     start_run(
-        num_examples=20, batch_size=32, max_epochs=2, print_every=1, wandb_mode=WandbMode.DISABLED.value,
-        # load_pretrained=True, model_checkpoint_path="../checkpoint/ic/ViT_encoder+Bert_decoder_small_data_ep=10"
+        num_examples=1000, batch_size=16, max_epochs=10, print_every=1, wandb_mode=WandbMode.ONLINE.value,
+        save_model=True,
+        load_pretrained=True, model_checkpoint_path="../checkpoint/ic/Encoder_google-vit-base-patch16-224-in21k_Decoder_gpt2_lr=0.001_tr=785_bs=16_ep=1_last_ep.pt"
     )
 
-    probability_distribution_of_caption()
+    # probability_distribution_of_caption(
+    #     "../checkpoint/ic/Encoder_google-vit-base-patch16-224-in21k_Decoder_gpt2_small_data_ep=2",
+    #     num_examples=5, batch_size=5
+    # )

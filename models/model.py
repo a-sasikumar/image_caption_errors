@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import wandb
 from PIL import Image
 from torch.nn import Linear
 from torch.utils.data import Dataset, DataLoader
@@ -29,13 +30,12 @@ if torch.cuda.is_available():
 print(device)
 
 
-# def load_invalid_urls() -> set:
-#     with open('../data/invalid_urls.pickle', 'rb') as f:
-#         return pickle.load(f)
+def load_invalid_urls() -> set:
+    with open('../data/invalid_urls.pickle', 'rb') as f:
+        return pickle.load(f)
 
 
-# invalid_urls = load_invalid_urls()
-invalid_urls = set()
+invalid_urls = load_invalid_urls()
 
 
 def persist_invalid_urls():
@@ -204,7 +204,7 @@ def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoa
 
 
 def persist_model(my_model, path_root="../checkpoint/", append_name="") -> str:
-    save_path = path_root + my_model.name + append_name
+    save_path = path_root + my_model.name + append_name + ".pt"
     torch.save(my_model.state_dict(), save_path)
     print('Model saved to path {} successfully.'.format(save_path))
     return save_path
@@ -415,7 +415,6 @@ def test_load_data():
 
 def test_image_model():
     url, filename = ("https://github.com/pytorch/hub/raw/master/images/dog.jpg", "../data/dog.jpg")
-    print(f'Got exception {e}.')
     urllib.request.urlretrieve(url, filename)
 
     input_image = Image.open(filename)
