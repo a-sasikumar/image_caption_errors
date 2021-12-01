@@ -78,23 +78,27 @@ class ImageCaptioningDataset(Dataset):
         valid_indices = self._find_valid_image_indices(X)
         sentences = []
         self.encoded_images = []
+        self.foil_word = []  # only useful for test data evaluation.
         for idx in valid_indices:
             row = X[idx]
             image = Image.open(self.data_root + row[2])
             encoded_image = feature_extractor(images=image, return_tensors="pt")
             self.encoded_images.append(encoded_image)
             sentences.append(X[idx][0])
-
+            if len(row) >= 4:
+                self.foil_word.append(row[3])
         self.encoded_text = tokenizer(sentences, truncation=True, padding=True)
-        print(f'original sentences = {sentences}')
+        # print(f'original sentences = {sentences}')
         print('dataset initialized.')
 
     def __getitem__(self, index):
         encodings = {
             'pixel_values': self.encoded_images[index].pixel_values,
             'labels': torch.tensor(self.encoded_text['input_ids'][index]),
-            'attention_mask': torch.tensor(self.encoded_text['attention_mask'][index])
+            'attention_mask': torch.tensor(self.encoded_text['attention_mask'][index]),
         }
+        if len(self.foil_word) > 0:
+            encodings['foil_word'] = self.foil_word[index]
         return encodings
 
     def __len__(self):
@@ -146,15 +150,41 @@ class ImageCaptioningModel(nn.Module):
         return outputs
 
 
-def start_run(
-        num_examples=10, batch_size=16, print_every=1, max_epochs=5, wandb_mode="online",
-        load_pretrained=False, model_checkpoint_path=None
-):
+def get_test_dataloader(num_examples=10, batch_size=16, foil_only=False):
+    test_data = pd.read_csv(
+        '../data/test_data/part-00000-9d7fcbd5-eed5-4753-a955-d0dd5f1d7bf1-c000.csv',
+        escapechar='\\',
+        nrows=num_examples * 2 if foil_only else num_examples
+    )
+    if foil_only:
+        test_data = test_data[test_data['foil']]
+    filename = test_data['file_name'].values.tolist()
+    caption = test_data['caption'].values.tolist()
+    urls = test_data['flickr_url'].values.tolist()
+    target = test_data['foil'].values.reshape(-1).tolist()
+    foil_word = test_data['foil_word'].values.tolist()
+
+    X_test = [(caption_, url_, filename_, foil_word_) for caption_, url_, filename_, foil_word_ in zip(caption, urls, filename, foil_word)]
+    Y_test = np.array(target) * 1
+
+    tokenizer = load_pretrained_tokenizer(pretrained_decoder_name, model_max_length=20)
+    feature_extractor = ViTFeatureExtractor.from_pretrained(
+        pretrained_encoder_name
+    )
+
+    test_dataset = ImageCaptioningDataset(X_test, Y_test, tokenizer, feature_extractor)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+    return test_dataloader
+
+
+def get_train_val_dataloaders(num_examples=10, batch_size=16, target_foil=None):
     train_data = pd.read_csv(
         '../data/train_data/part-00000-079f7de7-8645-4478-a8dd-f3249585db1c-c000.csv',
         escapechar='\\',
-        nrows=num_examples
+        nrows=num_examples * 2 if target_foil else num_examples
     )
+    if target_foil:
+        train_data = train_data[train_data['foil'] == target_foil]
     filename = train_data['file_name'].values.tolist()
     caption = train_data['caption'].values.tolist()
     urls = train_data['flickr_url'].values.tolist()
@@ -174,6 +204,16 @@ def start_run(
 
     val_dataset = ImageCaptioningDataset(X_test, y_test, tokenizer, feature_extractor)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
+
+    return train_dataloader, val_dataloader
+
+
+def start_run(
+        num_examples=10, batch_size=16, print_every=1, max_epochs=5, wandb_mode="online",
+        load_pretrained=False, model_checkpoint_path=None
+):
+    train_dataloader, val_dataloader = get_train_val_dataloaders(num_examples, batch_size, target_foil=False)
+    tokenizer = load_pretrained_tokenizer(pretrained_decoder_name, model_max_length=20)
 
     if load_pretrained:
         my_model = load_model_from_disk(model_checkpoint_path, ImageCaptioningModel())
@@ -266,6 +306,109 @@ def validate_ic(dataloader, my_model, tokenizer, log_metric=False):
         })
 
 
+def find_label_scores(model, my_labels, pixel_values, attention_mask, eos_token_id):
+    """
+    Gives scores to each possible caption representation so that we can find the most probable caption.
+    :param model: pre-trained model to be used in eval mode.
+    :param my_labels: torch tensor of shape (N, K) where N is the number of different captions and K is the length of
+        every caption. my_label[i] has the label ids for ith caption.
+    :param pixel_values: torch tensor of shape (1, 3, 224, 224) having pixel values for a single image corresponding to
+        all the captions.
+    :param attention_mask: torch tensor of shape (K,) having attention mask for all captions. All captions have the
+        same attention mask.
+    :param eos_token_id: EOS token id that the tokenizer uses.
+    :return: torch tensor of shape (N,) where we have sum of log of prob of all captions according to the LM.
+    """
+    model.eval()
+    N = my_labels.shape[0]
+    batch = {
+        'pixel_values': pixel_values.repeat(N, 1, 1, 1),
+        'attention_mask': attention_mask.reshape(1, -1).repeat(N, 1),
+        'labels': my_labels
+    }
+    for k, v in batch.items():
+        batch[k] = v.to(device)
+    outputs = model(batch)
+    scores = []
+    for i in range(N):
+        prob = torch.softmax(outputs.logits[i], dim=1)  # (k, V) where k is the length of each caption.
+        log_prob = torch.log(prob)  # (k, V)
+        sum_log_prob = 0
+        for ii in range(log_prob.shape[0]):
+            most_prob_label_id = torch.argmax(log_prob[ii])
+            if most_prob_label_id == eos_token_id:
+                break
+            sum_log_prob += log_prob[ii][most_prob_label_id]
+        scores.append(sum_log_prob)
+    return torch.tensor(scores, dtype=torch.float32)
+
+
+def probability_distribution_of_caption():
+    persist_path = "../checkpoint/ic/Encoder_google-vit-base-patch16-224-in21k_Decoder_gpt2_small_data_ep=2"
+
+    trained_model = load_model_from_disk(persist_path, ImageCaptioningModel())
+    trained_model.eval()
+    trained_model.to(device)
+    tokenizer = load_pretrained_tokenizer(pretrained_decoder_name, model_max_length=20)
+
+    test_dataloader = get_test_dataloader(5, 5, foil_only=True)
+    for i, batch in enumerate(test_dataloader):
+        for k, v in batch.items():
+            if k != 'foil_word':
+                batch[k] = v.to(device)
+        with torch.no_grad():
+            gen_ids = trained_model.model.generate(batch['pixel_values'].squeeze(dim=1))
+            decoded_text = tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
+            print('decoded_val_text={}'.format(decoded_text))
+
+            outputs = trained_model(batch)
+
+            candidate_labels = []
+            # Generate multiple captions for each input caption by replacing a word.
+            N = batch['labels'].shape[0]  # number of examples.
+            for n in np.arange(N):
+                attn_mask = batch['attention_mask'][n]
+                num_tokens = attn_mask.shape[0]
+                # number of tokens with attention mask 1.
+                num_valid_tokens = num_tokens if attn_mask[-1] == 1 else (attn_mask == 0).nonzero(as_tuple=True)[0][0]
+                my_labels = torch.zeros((num_valid_tokens, num_tokens), dtype=torch.int64)
+                # replace every word with LM word.
+                for j in np.arange(num_valid_tokens):
+                    copy_labels = batch['labels'][n].clone().detach().to(torch.int64)
+                    # replace jth word with best word according to LM word other than the same word.
+                    _, top6 = torch.topk(outputs.logits[n][j], 6)
+                    for idx in top6:
+                        if idx != copy_labels[j] and idx not in [tokenizer.eos_token_id, tokenizer.bos_token_id, tokenizer.pad_token_id, tokenizer.cls_token_id]:
+                            copy_labels[j] = idx
+                            break
+                    my_labels[j] = copy_labels
+                candidate_labels.append(my_labels)
+
+            # Find the text equivalent of every candidate for every example.
+            for n in np.arange(N):
+                my_labels = candidate_labels[n]
+                decoded_captions_1 = tokenizer.batch_decode(my_labels)
+                decoded_captions = tokenizer.batch_decode(my_labels, skip_special_tokens=True)
+                # TODO: stop decoding when encountered EOS.
+                print(f'all captions with candidates\n{decoded_captions}')
+
+            # Find the best candidate for every example.
+            for n in np.arange(N):
+                my_labels = candidate_labels[n].clone().detach()
+                label_scores = find_label_scores(
+                    trained_model, my_labels, batch['pixel_values'][n], batch['attention_mask'][n],
+                    tokenizer.eos_token_id
+                )
+                ci = torch.argmax(label_scores)
+                foil_caption = tokenizer.decode(batch['labels'][n], skip_special_tokens=True)
+                correct_caption = tokenizer.decode(my_labels[ci], skip_special_tokens=True)
+                print(f'foil caption: {foil_caption}\ncorrected caption: {correct_caption}')
+                detected_foil_word = tokenizer.convert_ids_to_tokens(batch['labels'][n])[ci]
+                actual_foil_word = batch['foil_word'][n]
+                print(f"detected foil word: {detected_foil_word}\nactual foil word: {actual_foil_word}")
+    print('done')
+
+
 if __name__ == '__main__':
     class WandbMode(Enum):
         ONLINE = "online"
@@ -273,6 +416,8 @@ if __name__ == '__main__':
         DISABLED = "disabled"
 
     start_run(
-        num_examples=20, batch_size=32, max_epochs=2, print_every=2, wandb_mode=WandbMode.DISABLED.value,
+        num_examples=20, batch_size=32, max_epochs=2, print_every=1, wandb_mode=WandbMode.DISABLED.value,
         # load_pretrained=True, model_checkpoint_path="../checkpoint/ic/ViT_encoder+Bert_decoder_small_data_ep=10"
     )
+
+    probability_distribution_of_caption()

@@ -205,6 +205,7 @@ def load_train_val_data(num_examples=100, batch_size=20) -> (DataLoader, DataLoa
 def persist_model(my_model, path_root="../checkpoint/", append_name="") -> str:
     save_path = path_root + my_model.name + append_name
     torch.save(my_model.state_dict(), save_path)
+    print('Model saved to path {} successfully.'.format(save_path))
     return save_path
 
 
