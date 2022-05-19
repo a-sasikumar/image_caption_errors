@@ -131,3 +131,7 @@ dmypy.json
 # Dataset
 data/images
 models/wandb
+data/
+checkpoint/
+.DS_Store
+.idea/
